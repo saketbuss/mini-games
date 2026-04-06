@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fluid Sensory Playground</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #020205;
+            font-family: 'Inter', sans-serif;
+            touch-action: none;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .ui-overlay {
+            position: absolute;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            gap: 0.75rem;
+            background: rgba(5, 5, 15, 0.7);
+            backdrop-filter: blur(25px);
+            padding: 0.8rem 1.2rem;
+            border-radius: 9999px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            pointer-events: auto;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+        }
+        .control-btn {
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 0.7rem;
+            font-weight: 700;
+            transition: all 0.2s;
+            white-space: nowrap;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .mode-gl {
+            background: linear-gradient(135deg, #4f46e5, #9333ea);
+        }
+        #instructions {
+            position: absolute;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.3);
+            pointer-events: none;
+            text-align: center;
+            font-size: 0.7rem;
+            letter-spacing: 0.3em;
+            z-index: 5;
+            text-transform: uppercase;
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="instructions">DRAG TO SWIRL • FLOWING VECTOR FIELD</div>
+
+    <div class="ui-overlay">
+        <button id="btn-mode" class="control-btn mode-gl">Engine: WebGL</button>
+        <button id="btn-viscosity" class="control-btn">Viscosity: Silk</button>
+        <button id="btn-color" class="control-btn">Palette</button>
+        <button id="btn-audio" class="control-btn">Sound: Off</button>
+    </div>
+
+    <canvas id="canvas-2d" class="hidden"></canvas>
+    <canvas id="canvas-webgl"></canvas>
+
+    <!-- WebGL Shaders -->
+    <script id="vs" type="x-shader/x-vertex">
+        attribute vec2 a_pos;
+        attribute vec2 a_vel;
+        
+        varying float v_speed;
+        varying vec2 v_vel;
+
+        void main() {
+            v_speed = length(a_vel);
+            v_vel = a_vel;
+            
+            // Subtle motion blur/stretch effect
+            // We shift the particle slightly in the direction of its velocity
+            vec2 stretched_pos = a_pos + (a_vel * 0.5);
+            
+            gl_PointSize = clamp(v_speed * 150.0, 1.0, 3.0);
+            gl_Position = vec4(stretched_pos, 0.0, 1.0);
+        }
+    </script>
+    <script id="fs" type="x-shader/x-fragment">
+        precision highp float;
+        varying float v_speed;
+        varying vec2 v_vel;
+        uniform vec3 u_col1;
+        uniform vec3 u_col2;
+
+        void main() {
+            // Color mapping based on velocity magnitude and direction
+            float mix_val = clamp(v_speed * 25.0, 0.0, 1.0);
+            vec3 color = mix(u_col1, u_col2, mix_val);
+            
+            // Add a "shimmer" based on movement direction
+            float shimmer = abs(v_vel.x) * 0.2;
+            color += shimmer;
+
+            gl_FragColor = vec4(color, 0.75);
+        }
+    </script>
+
+    <script type="module">
+        const c2d = document.getElementById('canvas-2d');
+        const cgl = document.getElementById('canvas-webgl');
+        const ctx = c2d.getContext('2d', { alpha: false });
+        const gl = cgl.getContext('webgl', { antialias: true, alpha: false });
+        
+        let width, height;
+        let isWebGL = true;
+        let mouse = { x: -1000, y: -1000, px: -1000, py: -1000, vx: 0, vy: 0, glX: -2, glY: -2, isDown: false };
+        
+        let settings = {
+            particleCount: 1800,
+            glCount: 120000, // Increased for denser silk look
+            friction: 0.97,
+            viscosity: 0.15,
+            interactionRadius: 0.45,
+            colorHue: 220,
+            audioEnabled: false
+        };
+
+        const palettes = [
+            { c1: [0.05, 0.1, 0.3], c2: [0.3, 0.7, 1.0], h: 220 }, // Midnight Blue
+            { c1: [0.2, 0.05, 0.3], c2: [0.8, 0.4, 1.0], h: 280 }, // Deep Purple
+            { c1: [0.3, 0.1, 0.05], c2: [1.0, 0.6, 0.2], h: 25 },  // Ember
+            { c1: [0.05, 0.2, 0.1], c2: [0.2, 1.0, 0.6], h: 150 }  // Aurora
+        ];
+        let palIdx = 0;
+
+        // --- 2D ENGINE (Legacy/Fallback) ---
+        class Particle2D {
+            constructor() { this.reset(); }
+            reset() {
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = (Math.random() - 0.5) * 2;
+                this.size = Math.random() * 2 + 1;
+            }
+            update() {
+                const dx = mouse.x - this.x;
+                const dy = mouse.y - this.y;
+                const d = Math.sqrt(dx*dx + dy*dy);
+                if (d < 150) {
+                    const f = (1 - d / 150) * settings.viscosity;
+                    this.vx += mouse.vx * f + (dy/d) * f * 2.5;
+                    this.vy += mouse.vy * f - (dx/d) * f * 2.5;
+                }
+                this.vx *= settings.friction; this.vy *= settings.friction;
+                this.x += this.vx; this.y += this.vy;
+                if (this.x < 0) this.x = width; if (this.x > width) this.x = 0;
+                if (this.y < 0) this.y = height; if (this.y > height) this.y = 0;
+            }
+            draw() {
+                const s = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+                ctx.fillStyle = `hsla(${settings.colorHue + s * 12}, 80%, 60%, ${0.4 + s * 0.1})`;
+                ctx.beginPath(); ctx.arc(this.x, this.y, this.size + s * 0.4, 0, Math.PI * 2); ctx.fill();
+            }
+        }
+        let particles2d = [];
+
+        // --- WEBGL ENGINE ---
+        let glProg, pBuf, vBuf;
+        let glParticles, glVels;
+
+        function initGL() {
+            const vsSource = document.getElementById('vs').text;
+            const fsSource = document.getElementById('fs').text;
+            
+            const vs = gl.createShader(gl.VERTEX_SHADER);
+            gl.shaderSource(vs, vsSource);
+            gl.compileShader(vs);
+            
+            const fs = gl.createShader(gl.FRAGMENT_SHADER);
+            gl.shaderSource(fs, fsSource);
+            gl.compileShader(fs);
+            
+            glProg = gl.createProgram();
+            gl.attachShader(glProg, vs);
+            gl.attachShader(glProg, fs);
+            gl.linkProgram(glProg);
+
+            glParticles = new Float32Array(settings.glCount * 2);
+            glVels = new Float32Array(settings.glCount * 2);
+            
+            for(let i=0; i<settings.glCount*2; i++) {
+                glParticles[i] = Math.random() * 2 - 1;
+                glVels[i] = 0;
+            }
+            
+            pBuf = gl.createBuffer();
+            vBuf = gl.createBuffer();
+        }
+
+        // --- SHARED ---
+        let audioCtx;
+        function playTone(freq) {
+            if (!settings.audioEnabled) return;
+            if(!audioCtx) audioCtx = new AudioContext();
+            const osc = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            g.gain.setValueAtTime(0.04, audioCtx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+            osc.connect(g); g.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            c2d.width = cgl.width = width;
+            c2d.height = cgl.height = height;
+            particles2d = Array.from({length: settings.particleCount}, () => new Particle2D());
+            if (gl) gl.viewport(0, 0, width, height);
+        }
+
+        function loop() {
+            if (!isWebGL) {
+                ctx.fillStyle = 'rgba(2, 2, 5, 0.2)';
+                ctx.fillRect(0, 0, width, height);
+                mouse.vx = (mouse.x - mouse.px) * 0.4;
+                mouse.vy = (mouse.y - mouse.py) * 0.4;
+                mouse.px = mouse.x; mouse.py = mouse.y;
+                particles2d.forEach(p => { p.update(); p.draw(); });
+            } else {
+                const aspect = width / height;
+                const mvx = (mouse.glX - mouse.px) * 0.5;
+                const mvy = (mouse.glY - mouse.py) * 0.5;
+                mouse.px = mouse.glX; mouse.py = mouse.glY;
+
+                for(let i=0; i<settings.glCount; i++) {
+                    let idx = i * 2;
+                    let px = glParticles[idx];
+                    let py = glParticles[idx+1];
+                    
+                    let dx = mouse.glX - px;
+                    let dy = mouse.glY - py;
+                    
+                    // Vector Field Physics (Not a circle)
+                    // We combine a pull with a perpendicular "vortex" force
+                    let d = Math.sqrt((dx*aspect)*(dx*aspect) + dy*dy);
+                    
+                    if(d < settings.interactionRadius) {
+                        let force = (1.0 - d/settings.interactionRadius) * 0.0015;
+                        
+                        // Pull towards mouse
+                        glVels[idx] += dx * force;
+                        glVels[idx+1] += dy * force;
+                        
+                        // Swirl/Vortex force (perpendicular to radial)
+                        glVels[idx] += (dy / d) * force * 1.8;
+                        glVels[idx+1] -= (dx * aspect / d) * force * 1.8;
+                        
+                        // Follow mouse movement
+                        glVels[idx] += mvx * force * 5.0;
+                        glVels[idx+1] += mvy * force * 5.0;
+                    }
+                    
+                    // Apply movement
+                    glParticles[idx] += glVels[idx];
+                    glParticles[idx+1] += glVels[idx+1];
+                    
+                    // Natural decay
+                    glVels[idx] *= settings.friction;
+                    glVels[idx+1] *= settings.friction;
+                    
+                    // Boundary wrap
+                    if(glParticles[idx]>1.02) glParticles[idx]=-1.02;
+                    if(glParticles[idx]<-1.02) glParticles[idx]=1.02;
+                    if(glParticles[idx+1]>1.02) glParticles[idx+1]=-1.02;
+                    if(glParticles[idx+1]<-1.02) glParticles[idx+1]=1.02;
+                }
+
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // Additive blending for "glow"
+                
+                gl.clearColor(0.01, 0.01, 0.02, 1);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+                
+                gl.useProgram(glProg);
+                const pal = palettes[palIdx];
+                gl.uniform3f(gl.getUniformLocation(glProg, 'u_col1'), ...pal.c1);
+                gl.uniform3f(gl.getUniformLocation(glProg, 'u_col2'), ...pal.c2);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, pBuf);
+                gl.bufferData(gl.ARRAY_BUFFER, glParticles, gl.DYNAMIC_DRAW);
+                const aP = gl.getAttribLocation(glProg, 'a_pos');
+                gl.enableVertexAttribArray(aP);
+                gl.vertexAttribPointer(aP, 2, gl.FLOAT, false, 0, 0);
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, vBuf);
+                gl.bufferData(gl.ARRAY_BUFFER, glVels, gl.DYNAMIC_DRAW);
+                const aV = gl.getAttribLocation(glProg, 'a_vel');
+                gl.enableVertexAttribArray(aV);
+                gl.vertexAttribPointer(aV, 2, gl.FLOAT, false, 0, 0);
+
+                gl.drawArrays(gl.POINTS, 0, settings.glCount);
+            }
+            requestAnimationFrame(loop);
+        }
+
+        // --- EVENTS ---
+        const handleMove = (x, y) => {
+            mouse.x = x; mouse.y = y;
+            mouse.glX = (x / width) * 2 - 1;
+            mouse.glY = (1 - (y / height)) * 2 - 1;
+        };
+        
+        window.addEventListener('mousemove', e => handleMove(e.clientX, e.clientY));
+        window.addEventListener('touchmove', e => { 
+            handleMove(e.touches[0].clientX, e.touches[0].clientY); 
+            e.preventDefault(); 
+        }, {passive:false});
+        
+        const interactionStart = () => {
+            mouse.isDown = true;
+            playTone(180 + (1 - mouse.y/height)*350);
+        };
+        window.addEventListener('mousedown', interactionStart);
+        window.addEventListener('touchstart', interactionStart);
+        window.addEventListener('mouseup', () => mouse.isDown = false);
+        window.addEventListener('touchend', () => mouse.isDown = false);
+
+        document.getElementById('btn-mode').onclick = (e) => {
+            isWebGL = !isWebGL;
+            c2d.classList.toggle('hidden', isWebGL);
+            cgl.classList.toggle('hidden', !isWebGL);
+            e.target.innerText = `Engine: ${isWebGL ? 'WebGL' : 'Canvas'}`;
+        };
+
+        document.getElementById('btn-viscosity').onclick = (e) => {
+            const v = [{l:'Silk', f:0.97, r:0.45}, {l:'Honey', f:0.85, r:0.3}, {l:'Water', f:0.99, r:0.6}];
+            settings.viscIdx = ((settings.viscIdx || 0) + 1) % 3;
+            settings.friction = v[settings.viscIdx].f;
+            settings.interactionRadius = v[settings.viscIdx].r;
+            e.target.innerText = `Viscosity: ${v[settings.viscIdx].l}`;
+        };
+
+        document.getElementById('btn-color').onclick = () => {
+            palIdx = (palIdx + 1) % palettes.length;
+            settings.colorHue = palettes[palIdx].h;
+        };
+
+        document.getElementById('btn-audio').onclick = (e) => {
+            settings.audioEnabled = !settings.audioEnabled;
+            e.target.classList.toggle('active', settings.audioEnabled);
+            e.target.innerText = `Sound: ${settings.audioEnabled ? 'On' : 'Off'}`;
+        };
+
+        window.addEventListener('resize', resize);
+        initGL();
+        resize();
+        loop();
+    </script>
+</body>
+</html>
