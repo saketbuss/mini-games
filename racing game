@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Apple Glass - AR Drive & Flight</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;300;400;600&display=swap');
+        
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            touch-action: none;
+        }
+
+        #game-canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        /* Apple Glass / AR HUD Styles */
+        .glass-hud {
+            z-index: 10;
+            pointer-events: none;
+            color: rgba(255, 255, 255, 0.95);
+            text-shadow: 0 0 10px rgba(0, 150, 255, 0.5);
+        }
+
+        .glass-panel {
+            background: rgba(15, 25, 40, 0.2);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(100, 200, 255, 0.15);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 1.5rem;
+            box-sizing: border-box;
+            opacity: 0;
+            transition: opacity 1s ease-in-out;
+        }
+
+        #startup-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 50;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            transition: opacity 1s ease;
+            pointer-events: auto;
+        }
+
+        .ar-reticle {
+            width: 60px;
+            height: 60px;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ar-reticle::after {
+            content: '';
+            width: 4px;
+            height: 4px;
+            background: rgba(255,255,255,0.8);
+            border-radius: 50%;
+        }
+
+        .touch-zone {
+            position: absolute;
+            top: 0;
+            width: 50%;
+            height: 100%;
+            z-index: 15;
+            pointer-events: auto;
+        }
+        #touch-left { left: 0; }
+        #touch-right { right: 0; }
+        
+        #touch-boost {
+            position: absolute;
+            bottom: 40%;
+            right: 5%;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(74, 222, 128, 0.2);
+            border: 2px solid rgba(74, 222, 128, 0.8);
+            z-index: 25;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #4ade80;
+            font-weight: bold;
+            font-size: 12px;
+            letter-spacing: 2px;
+            pointer-events: auto;
+            user-select: none;
+            opacity: 0.8;
+            transition: transform 0.1s, background 0.1s;
+        }
+        #touch-boost:active { transform: scale(0.9); background: rgba(74, 222, 128, 0.5); }
+
+        #touch-flight {
+            position: absolute;
+            bottom: 40%;
+            left: 5%;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(59, 130, 246, 0.2);
+            border: 2px solid rgba(59, 130, 246, 0.8);
+            z-index: 25;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #3b82f6;
+            font-weight: bold;
+            font-size: 12px;
+            letter-spacing: 1px;
+            pointer-events: auto;
+            user-select: none;
+            opacity: 0.8;
+            transition: transform 0.1s, background 0.3s;
+        }
+        #touch-flight:active { transform: scale(0.9); }
+
+        #damage-flash {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 0, 0, 0.3);
+            z-index: 30;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .ar-scrollbar::-webkit-scrollbar { height: 4px; width: 4px; }
+        .ar-scrollbar::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 4px; }
+        .ar-scrollbar::-webkit-scrollbar-thumb { background: rgba(74, 222, 128, 0.5); border-radius: 4px; }
+        
+        .skin-card {
+            min-width: 140px;
+            flex-shrink: 0;
+            scroll-snap-align: start;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="game-canvas"></canvas>
+    <div id="damage-flash"></div>
+
+    <div id="touch-left" class="touch-zone"></div>
+    <div id="touch-right" class="touch-zone"></div>
+    <div id="touch-boost" class="glass-panel" style="display: none;">BOOST</div>
+    <div id="touch-flight" class="glass-panel" style="display: none;">FLIGHT</div>
+
+    <!-- AR Interface -->
+    <div id="ui-layer">
+        <div class="flex justify-between items-start w-full glass-hud">
+            <div class="flex items-center gap-3">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-white opacity-70"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                <div class="flex flex-col w-32 md:w-48">
+                    <div class="flex justify-between w-full items-end">
+                        <span class="text-[10px] md:text-xs font-semibold tracking-widest opacity-50 uppercase">Race Progress</span>
+                        <span id="race-pct" class="text-xs font-bold">0%</span>
+                    </div>
+                    <div class="w-full h-1 bg-white/20 mt-1 rounded-full overflow-hidden">
+                        <div id="race-progress-bar" class="h-full bg-green-400 w-0 transition-all duration-300 shadow-[0_0_8px_rgba(74,222,128,0.8)]"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="glass-panel px-4 py-2 flex flex-col items-end gap-1">
+                <div class="flex items-center gap-2">
+                    <div class="w-2 h-2 rounded-full bg-green-400 animate-pulse shadow-[0_0_5px_#4ade80]"></div>
+                    <span class="text-xs font-medium tracking-widest">AR LINK ACTIVE</span>
+                </div>
+                <span id="hud-vehicle-name" class="text-[10px] font-mono opacity-50 uppercase">CONCEPT_V1</span>
+            </div>
+        </div>
+
+        <div class="ar-reticle glass-hud"></div>
+
+        <div class="flex justify-between items-end w-full glass-hud">
+            <div class="flex flex-col">
+                <span class="text-xs font-semibold tracking-widest opacity-50 uppercase mb-1">Velocity</span>
+                <div class="flex items-baseline gap-1">
+                    <span id="speed-display" class="text-5xl md:text-6xl font-thin tracking-tighter">000</span>
+                    <span class="text-sm md:text-lg font-light opacity-70">MPH</span>
+                </div>
+                <div class="w-24 md:w-32 h-1 bg-white/20 mt-2 rounded-full overflow-hidden">
+                    <div id="rpm-bar" class="h-full bg-white w-0 transition-all duration-75"></div>
+                </div>
+                <span class="text-[10px] font-semibold tracking-widest text-cyan-400 opacity-80 uppercase mt-3 mb-1">Nitro Reserve</span>
+                <div class="w-24 md:w-32 h-1.5 bg-cyan-900/40 rounded-full overflow-hidden border border-cyan-500/30">
+                    <div id="nitro-bar" class="h-full bg-cyan-400 w-full transition-all duration-75 shadow-[0_0_8px_rgba(34,211,238,0.8)]"></div>
+                </div>
+            </div>
+
+            <div class="flex flex-col items-end text-right">
+                <span class="text-xs font-semibold tracking-widest opacity-50 uppercase mb-1">Position</span>
+                <div class="flex items-baseline gap-1">
+                    <span id="position-display" class="text-4xl md:text-5xl font-light flex items-baseline gap-1">1 <span class="text-sm md:text-lg font-light opacity-70">/ 4</span></span>
+                </div>
+                <span id="status-msg" class="text-[10px] md:text-xs font-medium mt-2 tracking-wide text-blue-300">SYSTEM NOMINAL</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Startup Screen -->
+    <div id="startup-screen">
+        <h1 class="text-3xl font-light tracking-widest mb-2 mt-4 text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.5)]">GLASS<span class="font-semibold text-green-400">OS</span></h1>
+        
+        <p class="text-[10px] font-bold opacity-50 uppercase tracking-[0.2em] mb-2 w-full max-w-2xl px-4 text-left">1. Select Vehicle Frame</p>
+        <div id="skin-list" class="flex gap-3 mb-4 overflow-x-auto w-full max-w-2xl px-4 pb-2 ar-scrollbar snap-x"></div>
+
+        <p class="text-[10px] font-bold opacity-50 uppercase tracking-[0.2em] mb-2 mt-2 w-full max-w-2xl px-4 text-left">2. Select Race Parameter</p>
+        <div id="level-list" class="flex flex-col gap-2 mb-6 max-h-40 overflow-y-auto w-full max-w-2xl px-4 ar-scrollbar z-10"></div>
+
+        <button id="start-btn" class="glass-panel px-12 py-3 text-sm tracking-widest uppercase font-bold hover:bg-white/10 transition-colors cursor-pointer border-green-400/50 hover:border-green-400 shadow-[0_0_15px_rgba(74,222,128,0.2)]">
+            Initialize Drive
+        </button>
+        <p class="text-[11px] opacity-50 mt-4 max-w-sm text-center pb-4 leading-relaxed">
+            Use Arrow Keys, A/D, or tap screen sides to steer.<br>
+            <span class="text-green-400 font-bold">Space</span> to Boost. <span class="text-blue-400 font-bold">F</span> to Transform.
+        </p>
+    </div>
+
+    <!-- End Screen -->
+    <div id="end-screen" style="display: none; opacity: 0; pointer-events: auto;" class="absolute top-0 left-0 w-full h-full z-50 bg-black/90 flex flex-col items-center justify-center text-white transition-opacity duration-1000">
+        <h1 class="text-4xl md:text-5xl font-light tracking-widest mb-4">RACE <span class="font-semibold text-green-400">COMPLETE</span></h1>
+        <p class="text-xl font-light mb-8">FINAL POSITION: <span id="final-pos" class="font-bold text-5xl ml-2">1</span><span class="text-lg opacity-50"> / 4</span></p>
+        <button id="restart-btn" class="glass-panel px-8 py-3 text-sm tracking-widest uppercase hover:bg-white/10 transition-colors cursor-pointer">
+            Return to Garage
+        </button>
+    </div>
+
+    <script>
+        window.onload = function() {
+            // --- Three.js Setup ---
+            const canvas = document.getElementById('game-canvas');
+            const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050a12);
+            scene.fog = new THREE.Fog(0x050a12, 50, 600); 
+
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1500);
+            camera.position.set(0, 4, -12);
+            camera.lookAt(0, 0, 10);
+
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444455, 0.8);
+            hemiLight.position.set(0, 20, 0);
+            scene.add(hemiLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(20, 50, -20);
+            scene.add(dirLight);
+
+            // --- Game Configuration Data ---
+            const trackConfigs = {
+                cyber: { bg: 0x050a12, roadBg: '#050505', grid: '#00f3ff', border: 0x00f3ff, canyon: 0x0a1118, hemi: 0x223344, dir: 0xffffff, pColor: 0x00ffff, planet: 0xff0055 },
+                retro: { bg: 0x1d0a2e, roadBg: '#0f0518', grid: '#ff00ff', border: 0xff00ff, canyon: 0x1d0a2e, hemi: 0xff7e67, dir: 0xffb74d, pColor: 0xff00ff, planet: 0x00ffff },
+                ice:   { bg: 0xa0c4c4, roadBg: '#112233', grid: '#80deea', border: 0x006064, canyon: 0x90b4c4, hemi: 0xffffff, dir: 0x80deea, pColor: 0xffffff, planet: 0xe0f7fa }
+            };
+
+            const raceLevels = [
+                { id: 1, name: "Neon Sprint", theme: "cyber", length: 25000, bots: 2, diff: "easy" },
+                { id: 2, name: "Retro Run", theme: "retro", length: 35000, bots: 3, diff: "easy" },
+                { id: 3, name: "Cyber Circuit", theme: "cyber", length: 55000, bots: 4, diff: "medium" },
+                { id: 4, name: "Ice Glide", theme: "ice", length: 65000, bots: 4, diff: "medium" },
+                { id: 5, name: "Arcade Blitz", theme: "retro", length: 95000, bots: 5, diff: "hard" },
+                { id: 6, name: "Matrix Marathon", theme: "cyber", length: 115000, bots: 6, diff: "hard" },
+                { id: 7, name: "Frostbite Freeway", theme: "ice", length: 150000, bots: 7, diff: "expert" },
+                { id: 8, name: "Neon Nights", theme: "cyber", length: 175000, bots: 7, diff: "expert" },
+                { id: 9, name: "Avalanche Alley", theme: "ice", length: 200000, bots: 8, diff: "expert" },
+                { id: 10, name: "Vaporwave Voyage", theme: "retro", length: 225000, bots: 8, diff: "master" },
+                { id: 11, name: "The Glass Gauntlet", theme: "cyber", length: 250000, bots: 8, diff: "master" },
+                { id: 12, name: "Infinity Loop", theme: "retro", length: 300000, bots: 9, diff: "master" },
+            ];
+
+            const vehicles = [
+                { id: "concept", name: "Concept V1", color: 0xffffff, stats: { topSpeed: 1.15, accel: 1.15, handling: 1.15 }, chassis: [2.4, 0.6, 5.0], cab: [1.8, 0.5, 2.5], cabPos: [0, 0.55, -0.2], wheels: [[-1.3, 0, 1.8], [1.3, 0, 1.8], [-1.3, 0, -1.8], [1.3, 0, -1.8]], wRad: 0.4 },
+                { id: "truck", name: "Heavy Hauler", color: 0x3b82f6, stats: { topSpeed: 1.2, accel: 0.85, handling: 0.85 }, chassis: [2.6, 1.2, 6.5], cab: [2.6, 1.0, 2.0], cabPos: [0, 1.1, 1.5], wheels: [[-1.4, -0.2, 2.0], [1.4, -0.2, 2.0], [-1.4, -0.2, -2.0], [1.4, -0.2, -2.0]], wRad: 0.6 },
+                { id: "van", name: "Transit Box", color: 0x9ca3af, stats: { topSpeed: 1.05, accel: 1.0, handling: 0.95 }, chassis: [2.4, 0.6, 5.5], cab: [2.4, 1.5, 4.5], cabPos: [0, 1.05, -0.5], wheels: [[-1.2, 0, 1.8], [1.2, 0, 1.8], [-1.2, 0, -1.8], [1.2, 0, -1.8]], wRad: 0.4 },
+                { id: "f1", name: "Formula Mach", color: 0xef4444, stats: { topSpeed: 1.4, accel: 1.25, handling: 1.45 }, chassis: [1.8, 0.3, 6.0], cab: [1.0, 0.4, 1.5], cabPos: [0, 0.35, -0.5], spoiler: [2.2, 0.1, 0.8], wheels: [[-1.3, 0, 2.2], [1.3, 0, 2.2], [-1.4, 0.1, -2.2], [1.4, 0.1, -2.2]], wRad: 0.45, rearWRad: 0.55 },
+                { id: "kart", name: "Go-Kart", color: 0xeab308, stats: { topSpeed: 1.0, accel: 1.55, handling: 1.65 }, chassis: [1.5, 0.2, 2.5], cab: null, wheels: [[-0.9, 0, 1.0], [0.9, 0, 1.0], [-0.9, 0, -1.0], [0.9, 0, -1.0]], wRad: 0.25 },
+                { id: "suv", name: "Apex SUV", color: 0x10b981, stats: { topSpeed: 1.1, accel: 1.05, handling: 1.0 }, chassis: [2.5, 0.8, 5.2], cab: [2.3, 0.8, 3.5], cabPos: [0, 0.8, -0.5], wheels: [[-1.4, -0.1, 1.8], [1.4, -0.1, 1.8], [-1.4, -0.1, -1.8], [1.4, -0.1, -1.8]], wRad: 0.5 },
+                { id: "sports", name: "GT Phantom", color: 0xa855f7, stats: { topSpeed: 1.3, accel: 1.35, handling: 1.25 }, chassis: [2.2, 0.4, 4.8], cab: [1.6, 0.4, 2.0], cabPos: [0, 0.4, -0.2], spoiler: [2.0, 0.1, 0.4], wheels: [[-1.2, 0, 1.6], [1.2, 0, 1.6], [-1.2, 0, -1.6], [1.2, 0, -1.6]], wRad: 0.35 },
+                { id: "muscle", name: "V8 Bruiser", color: 0xf97316, stats: { topSpeed: 1.25, accel: 1.45, handling: 0.95 }, chassis: [2.3, 0.7, 5.0], cab: [1.8, 0.4, 2.0], cabPos: [0, 0.55, -0.8], engineBlock: true, wheels: [[-1.2, 0, 1.8], [1.2, 0, 1.8], [-1.3, 0.1, -1.6], [1.3, 0.1, -1.6]], wRad: 0.4, rearWRad: 0.5 },
+                { id: "police", name: "Interceptor", color: 0x000000, stats: { topSpeed: 1.25, accel: 1.25, handling: 1.15 }, chassis: [2.4, 0.6, 5.0], cab: [1.8, 0.5, 2.5], cabPos: [0, 0.55, -0.2], lightBar: "police", wheels: [[-1.3, 0, 1.8], [1.3, 0, 1.8], [-1.3, 0, -1.8], [1.3, 0, -1.8]], wRad: 0.4 },
+                { id: "taxi", name: "Metro Cab", color: 0xeab308, stats: { topSpeed: 1.1, accel: 1.1, handling: 1.1 }, chassis: [2.4, 0.6, 5.0], cab: [1.8, 0.5, 2.5], cabPos: [0, 0.55, -0.2], lightBar: "taxi", wheels: [[-1.3, 0, 1.8], [1.3, 0, 1.8], [-1.3, 0, -1.8], [1.3, 0, -1.8]], wRad: 0.4 },
+                { id: "bus", name: "City Cruiser", color: 0x14b8a6, stats: { topSpeed: 1.15, accel: 0.75, handling: 0.65 }, chassis: [2.8, 2.0, 9.0], cab: null, wheels: [[-1.5, -0.5, 3.0], [1.5, -0.5, 3.0], [-1.5, -0.5, -1.0], [1.5, -0.5, -1.0], [-1.5, -0.5, -3.0], [1.5, -0.5, -3.0]], wRad: 0.5 },
+                { id: "buggy", name: "Dune Hopper", color: 0x84cc16, stats: { topSpeed: 1.05, accel: 1.35, handling: 1.45 }, chassis: [1.8, 0.3, 3.5], cab: [1.2, 0.6, 1.5], cabPos: [0, 0.45, -0.2], wheels: [[-1.4, -0.2, 1.5], [1.4, -0.2, 1.5], [-1.4, -0.2, -1.5], [1.4, -0.2, -1.5]], wRad: 0.55 },
+                { id: "hotrod", name: "Flame Spitter", color: 0x7f1d1d, stats: { topSpeed: 1.35, accel: 1.55, handling: 0.75 }, chassis: [2.0, 0.5, 4.0], cab: [1.6, 0.5, 1.5], cabPos: [0, 0.5, -1.0], engineBlock: true, wheels: [[-1.2, -0.1, 1.5], [1.2, -0.1, 1.5], [-1.5, 0.3, -1.2], [1.5, 0.3, -1.2]], wRad: 0.3, rearWRad: 0.7 },
+                { id: "hover", name: "Anti-Grav MK1", color: 0x06b6d4, stats: { topSpeed: 1.45, accel: 1.05, handling: 1.55 }, chassis: [2.6, 0.5, 5.0], cab: [1.8, 0.4, 3.0], cabPos: [0, 0.45, 0], hover: true, wheels: [], wRad: 0 },
+                { id: "hyperion", name: "Hyperion X", color: 0xe0e0e0, stats: { topSpeed: 1.55, accel: 1.4, handling: 1.35 }, chassis: [2.4, 0.3, 5.5], cab: [1.6, 0.3, 2.0], cabPos: [0, 0.3, -0.3], spoiler: [2.2, 0.1, 0.5], wheels: [[-1.3, 0, 1.8], [1.3, 0, 1.8], [-1.4, 0.1, -1.8], [1.4, 0.1, -1.8]], wRad: 0.4, rearWRad: 0.5 },
+                { id: "monster", name: "Titan Crusher", color: 0x991b1b, stats: { topSpeed: 1.15, accel: 1.35, handling: 0.95 }, chassis: [2.8, 1.0, 5.5], cab: [2.0, 1.0, 2.5], cabPos: [0, 1.0, -0.5], wheels: [[-1.8, -0.5, 2.0], [1.8, -0.5, 2.0], [-1.8, -0.5, -2.0], [1.8, -0.5, -2.0]], wRad: 0.9 },
+                { id: "lightcycle", name: "Neon Cycle", color: 0x00ffff, stats: { topSpeed: 1.45, accel: 1.6, handling: 1.65 }, chassis: [0.8, 0.6, 4.0], cab: null, wheels: [[0, 0, 1.5], [0, 0, -1.5]], wRad: 0.7 },
+                { id: "drifter", name: "Drift King", color: 0x1d4ed8, stats: { topSpeed: 1.25, accel: 1.45, handling: 1.8 }, chassis: [2.4, 0.5, 4.8], cab: [1.6, 0.4, 2.0], cabPos: [0, 0.45, -0.2], spoiler: [2.4, 0.1, 0.6], wheels: [[-1.2, 0, 1.6], [1.2, 0, 1.6], [-1.2, 0, -1.6], [1.2, 0, -1.6]], wRad: 0.35 },
+                { id: "stealth", name: "Stealth Jet", color: 0x111111, stats: { topSpeed: 1.6, accel: 1.1, handling: 1.15 }, chassis: [2.8, 0.4, 7.0], cab: [1.2, 0.4, 2.5], cabPos: [0, 0.4, 0.5], spoiler: [3.5, 0.1, 1.0], wheels: [[-1.2, 0, 2.0], [1.2, 0, 2.0], [-1.4, 0.1, -2.5], [1.4, 0.1, -2.5]], wRad: 0.4, rearWRad: 0.5 }
+            ];
+
+            let selectedSkinIndex = 0;
+            let selectedLevelIndex = 0;
+            let currentTrack = 'cyber';
+
+            // --- 3D Geometry Factory ---
+            function prepareCurveGeo(geo) {
+                geo.userData.originalX = new Float32Array(geo.attributes.position.count);
+                for(let i=0; i<geo.attributes.position.count; i++) {
+                    geo.userData.originalX[i] = geo.attributes.position.getX(i);
+                }
+                return geo;
+            }
+
+            // --- PROCEDURAL GRID ROAD TEXTURE ---
+            const gridCanvas = document.createElement('canvas');
+            gridCanvas.width = 512; gridCanvas.height = 512;
+            const gridCtx = gridCanvas.getContext('2d');
+            const gridTex = new THREE.CanvasTexture(gridCanvas);
+            gridTex.wrapS = THREE.RepeatWrapping; gridTex.wrapT = THREE.RepeatWrapping;
+            gridTex.repeat.set(2, 60);
+
+            const roadWidth = 30;
+            const roadGeo = prepareCurveGeo(new THREE.PlaneGeometry(roadWidth, 1000, 1, 50));
+            const roadMat = new THREE.MeshPhongMaterial({ color: 0xffffff, map: gridTex, shininess: 80 });
+            const road = new THREE.Mesh(roadGeo, roadMat);
+            road.rotation.x = -Math.PI / 2;
+            scene.add(road);
+
+            const borderGeo = prepareCurveGeo(new THREE.PlaneGeometry(0.8, 1000, 1, 50));
+            const borderMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff });
+            const leftBorder = new THREE.Mesh(borderGeo, borderMat);
+            leftBorder.rotation.x = -Math.PI / 2; leftBorder.position.set(-roadWidth/2, 0.02, 0);
+            scene.add(leftBorder);
+            const rightBorder = new THREE.Mesh(borderGeo, borderMat);
+            rightBorder.rotation.x = -Math.PI / 2; rightBorder.position.set(roadWidth/2, 0.02, 0);
+            scene.add(rightBorder);
+
+            // --- HORIZON PLANET ---
+            const planetGeo = new THREE.SphereGeometry(300, 64, 64);
+            const planetMat = new THREE.MeshBasicMaterial({ color: 0xff0055, fog: false });
+            const planet = new THREE.Mesh(planetGeo, planetMat);
+            planet.position.set(0, -50, -800);
+            scene.add(planet);
+
+            // --- PROCEDURAL CANYON WALLS ---
+            const canyonItems = [];
+            const canyonGeo = new THREE.BoxGeometry(15, 60, 40);
+            const canyonMat = new THREE.MeshPhongMaterial({ color: 0x1a2b3c, shininess: 5, flatShading: true });
+            
+            for(let i=0; i<60; i++) {
+                const item = new THREE.Mesh(canyonGeo, canyonMat);
+                const isRight = i % 2 === 0;
+                item.logicalX = (isRight ? 1 : -1) * (roadWidth/2 + 10 + Math.random() * 5);
+                item.position.set(item.logicalX, 20, Math.random() * 1000);
+                item.scale.set(1 + Math.random(), 1 + Math.random()*0.5, 1 + Math.random());
+                scene.add(item);
+                canyonItems.push(item);
+            }
+
+            // --- SPEED PARTICLES ---
+            const particleCount = 800;
+            const particleGeo = new THREE.BufferGeometry();
+            const particlePos = new Float32Array(particleCount * 3);
+            for(let i=0; i<particleCount; i++) {
+                particlePos[i*3] = (Math.random() - 0.5) * 150; 
+                particlePos[i*3+1] = Math.random() * 30; 
+                particlePos[i*3+2] = Math.random() * 200; 
+            }
+            particleGeo.setAttribute('position', new THREE.BufferAttribute(particlePos, 3));
+            const particleMat = new THREE.PointsMaterial({ color: 0x00ffff, size: 0.3, transparent: true, opacity: 0.8 });
+            const particles = new THREE.Points(particleGeo, particleMat);
+            scene.add(particles);
+
+            // --- NITRO RINGS ---
+            const rings = [];
+            const ringGeo = new THREE.TorusGeometry(1.8, 0.15, 8, 24);
+            const ringMat = new THREE.MeshPhongMaterial({ color: 0x4ade80, emissive: 0x4ade80, emissiveIntensity: 1.5 });
+            for(let i=0; i<6; i++) {
+                const ring = new THREE.Mesh(ringGeo, ringMat);
+                ring.position.y = 1.0;
+                ring.logicalX = (Math.random() - 0.5) * (roadWidth - 5);
+                ring.position.z = 200 + i * 150;
+                scene.add(ring);
+                rings.push(ring);
+            }
+
+            // --- DYNAMIC OBSTACLES & BOOST PADS ---
+            const barriers = [];
+            const barrierGeo = new THREE.BoxGeometry(4.5, 1.2, 0.5);
+            const barrierMat = new THREE.MeshPhongMaterial({ color: 0xff0044, emissive: 0xff0000, emissiveIntensity: 0.8, transparent: true, opacity: 0.9 });
+            
+            const clouds = [];
+            const cloudGeo = new THREE.IcosahedronGeometry(3.5, 1);
+            const cloudMat = new THREE.MeshPhongMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 }); // Lower opacity, not flat
+
+            const boostPads = [];
+            const padGeo = new THREE.PlaneGeometry(4, 8);
+            const padCanvas = document.createElement('canvas');
+            padCanvas.width = 128; padCanvas.height = 256;
+            const padCtx = padCanvas.getContext('2d');
+            padCtx.fillStyle = 'rgba(0,0,0,0)'; padCtx.fillRect(0,0,128,256);
+            padCtx.fillStyle = '#4ade80'; 
+            padCtx.beginPath(); padCtx.moveTo(64, 0); padCtx.lineTo(128, 128); padCtx.lineTo(96, 128); padCtx.lineTo(96, 256); padCtx.lineTo(32, 256); padCtx.lineTo(32, 128); padCtx.lineTo(0, 128); padCtx.fill();
+            const padTex = new THREE.CanvasTexture(padCanvas);
+            const padMat = new THREE.MeshBasicMaterial({ map: padTex, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending });
+
+            function spawnObstacles(diffLevel) {
+                barriers.forEach(b => scene.remove(b.mesh)); barriers.length = 0;
+                clouds.forEach(c => scene.remove(c.mesh)); clouds.length = 0;
+                boostPads.forEach(p => scene.remove(p.mesh)); boostPads.length = 0;
+                
+                let count = diffLevel === 'easy' ? 4 : diffLevel === 'medium' ? 8 : diffLevel === 'hard' ? 14 : diffLevel === 'expert' ? 22 : 32;
+                
+                for(let i=0; i<count; i++) {
+                    const mesh = new THREE.Mesh(barrierGeo, barrierMat);
+                    mesh.position.y = 0.6; scene.add(mesh);
+                    barriers.push({ mesh: mesh, logicalX: (Math.random() - 0.5) * (roadWidth - 6), zPos: 400 + (Math.random() * 3000) + (i * 150), active: true });
+                }
+
+                for(let i=0; i<count; i++) {
+                    const mesh = new THREE.Mesh(cloudGeo, cloudMat);
+                    mesh.position.y = 8 + (Math.random() * 3); scene.add(mesh);
+                    const puff1 = new THREE.Mesh(new THREE.IcosahedronGeometry(2.5, 0), cloudMat); puff1.position.set(2, -1, 1); mesh.add(puff1);
+                    const puff2 = new THREE.Mesh(new THREE.IcosahedronGeometry(2.0, 0), cloudMat); puff2.position.set(-2, -0.5, -1); mesh.add(puff2);
+                    clouds.push({ mesh: mesh, logicalX: (Math.random() - 0.5) * (roadWidth), zPos: 600 + (Math.random() * 3000) + (i * 200), active: true });
+                }
+
+                for(let i=0; i<count/2; i++) {
+                    const mesh = new THREE.Mesh(padGeo, padMat);
+                    mesh.rotation.x = -Math.PI / 2; mesh.position.y = 0.05; scene.add(mesh);
+                    boostPads.push({ mesh: mesh, logicalX: (Math.random() - 0.5) * (roadWidth - 8), zPos: 500 + (Math.random() * 3000) + (i * 300), active: true });
+                }
+            }
+
+            // --- Procedural Vehicle Builder ---
+            const baseGlassMat = new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 100, transparent: true, opacity: 0.8 });
+            const baseWheelMat = new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 10 });
+            
+            function buildVehicle(skinDef, colorOverride) {
+                const group = new THREE.Group();
+                group.userData = { wheels: [], skin: skinDef };
+                
+                const carColor = colorOverride || skinDef.color;
+                const bodyMat = new THREE.MeshPhongMaterial({ color: carColor, shininess: 80, emissive: colorOverride ? carColor : 0x000000, emissiveIntensity: colorOverride ? 0.4 : 0 });
+
+                if(skinDef.chassis) {
+                    const chassisGeo = new THREE.BoxGeometry(...skinDef.chassis);
+                    const chassis = new THREE.Mesh(chassisGeo, bodyMat);
+                    chassis.position.y = 0.5;
+                    group.add(chassis);
+                }
+
+                if (skinDef.cab) {
+                    const cabinGeo = new THREE.BoxGeometry(...skinDef.cab);
+                    const cabin = new THREE.Mesh(cabinGeo, baseGlassMat);
+                    cabin.position.set(skinDef.cabPos[0], skinDef.cabPos[1] + 0.5, skinDef.cabPos[2]);
+                    group.add(cabin);
+                }
+
+                if (skinDef.spoiler) {
+                    const spGeo = new THREE.BoxGeometry(...skinDef.spoiler);
+                    const sp = new THREE.Mesh(spGeo, bodyMat);
+                    sp.position.set(0, skinDef.chassis[1] + 0.6, -(skinDef.chassis[2]/2) + 0.2);
+                    group.add(sp);
+                }
+                if (skinDef.engineBlock) {
+                    const enGeo = new THREE.BoxGeometry(1.0, 0.4, 1.2);
+                    const enMat = new THREE.MeshPhongMaterial({ color: 0x666666 });
+                    const en = new THREE.Mesh(enGeo, enMat);
+                    en.position.set(0, skinDef.chassis[1] + 0.4, skinDef.chassis[2]/2 - 0.8);
+                    group.add(en);
+                }
+
+                skinDef.wheels.forEach((pos, idx) => {
+                    const isRear = pos[2] < 0;
+                    const r = (isRear && skinDef.rearWRad) ? skinDef.rearWRad : skinDef.wRad;
+                    const wGeo = new THREE.CylinderGeometry(r, r, 0.3, 24);
+                    const w = new THREE.Mesh(wGeo, baseWheelMat);
+                    w.rotation.z = Math.PI / 2;
+                    w.position.set(pos[0], pos[1] + 0.4, pos[2]);
+                    
+                    const thrusterGeo = new THREE.ConeGeometry(r * 0.7, 1.5, 16);
+                    const thrusterMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending });
+                    const thruster = new THREE.Mesh(thrusterGeo, thrusterMat);
+                    thruster.rotation.x = Math.PI; // Point tip down
+                    thruster.position.set(0, -0.8, 0); 
+                    w.add(thruster);
+                    
+                    group.userData.thrusters = group.userData.thrusters || [];
+                    group.userData.thrusters.push(thrusterMat);
+
+                    group.add(w);
+                    group.userData.wheels.push({ mesh: w, isFront: !isRear });
+                });
+
+                if(skinDef.chassis) {
+                    const tlGeo = new THREE.BoxGeometry(0.6, 0.1, 0.1);
+                    const tlMat = new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0xff0000, emissiveIntensity: 5 });
+                    const tlL = new THREE.Mesh(tlGeo, tlMat);
+                    const tlR = new THREE.Mesh(tlGeo, tlMat);
+                    const tlZ = -(skinDef.chassis[2]/2) - 0.05;
+                    tlL.position.set(-0.8, 0.6, tlZ); tlR.position.set(0.8, 0.6, tlZ);
+                    group.add(tlL); group.add(tlR);
+                    group.userData.tailLights = [tlL, tlR];
+                }
+
+                return group;
+            }
+
+            let playerCarGroup = new THREE.Group();
+            scene.add(playerCarGroup);
+            let playerStats = { topSpeed: 1, accel: 1, handling: 1 };
+            
+            const opponents = [];
+            function spawnOpponents(botCount) {
+                opponents.forEach(opp => scene.remove(opp.group));
+                opponents.length = 0;
+
+                const oppColors = [0x00ffff, 0xff00ff, 0xffff00, 0xff3333, 0x33ff33, 0xff9900, 0x9933ff, 0xffffff, 0x0000ff];
+                const oppLanes = [-10, 10, -5, 5, 0, -12, 12, -8, 8];
+                
+                for(let i = 0; i < botCount; i++) {
+                    const randomSkin = vehicles[Math.floor(Math.random() * vehicles.length)];
+                    const colorIndex = i % oppColors.length;
+                    
+                    const oppGroup = buildVehicle(randomSkin, oppColors[colorIndex]);
+                    scene.add(oppGroup);
+                    
+                    opponents.push({
+                        group: oppGroup,
+                        trackPos: 50 + (i * 40), speed: 0, 
+                        lane: oppLanes[i % oppLanes.length], logicalX: oppLanes[i % oppLanes.length],
+                        targetSpeed: 0, name: 'COM ' + (i+1),
+                        stats: randomSkin.stats, isFlying: false,
+                        baseSpeedMult: 0.9 + (Math.random() * 0.2), 
+                        moodOffset: Math.random() * 1000, moodSpeed: 0.0005 + (Math.random() * 0.001),
+                        nextLaneChangeTime: Date.now() + Math.random() * 5000 
+                    });
+                }
+            }
+
+            // --- Game State & Logic ---
+            let isRunning = false;
+            let currentSpeed = 0;
+            const baseMaxSpeed = 3.5;
+            const baseAccel = 0.005;
+            let distance = 0; let playerTrackPos = 0; let raceEndPos = 15000; 
+            
+            let trackCurve = 0; let targetTrackCurve = 0; let curveTimer = 0;
+            let playerSkillModifier = 1.0; let currentRank = 1; let totalRacersCount = 1;
+            let nitroLevel = 100; let isBoosting = false;
+            
+            // Interaction Timers
+            let padBoostTimer = 0;
+            let impactTimer = 0;
+            
+            // TRANSFORMATION STATE
+            let isPlayerFlying = false;
+
+            let targetX = 0; let currentX = 0;
+
+            const keys = { ArrowLeft: false, ArrowRight: false, a: false, d: false, Space: false };
+            window.addEventListener('keydown', (e) => {
+                if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+                if (e.key === 'a' || e.key === 'A') keys.a = true;
+                if (e.key === 'd' || e.key === 'D') keys.d = true;
+                if (e.code === 'Space') keys.Space = true;
+                
+                // Toggle Flight
+                if (e.key.toLowerCase() === 'f') {
+                    isPlayerFlying = !isPlayerFlying;
+                    document.getElementById('touch-flight').style.backgroundColor = isPlayerFlying ? 'rgba(59, 130, 246, 0.5)' : 'rgba(59, 130, 246, 0.2)';
+                }
+            });
+            window.addEventListener('keyup', (e) => {
+                if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
+                if (e.key === 'a' || e.key === 'A') keys.a = false;
+                if (e.key === 'd' || e.key === 'D') keys.d = false;
+                if (e.code === 'Space') keys.Space = false;
+            });
+
+            const touchLeft = document.getElementById('touch-left');
+            const touchRight = document.getElementById('touch-right');
+            const touchBoost = document.getElementById('touch-boost');
+            const touchFlight = document.getElementById('touch-flight');
+            
+            window.addEventListener('touchstart', () => { 
+                touchBoost.style.display = 'flex'; 
+                touchFlight.style.display = 'flex';
+            }, { once: true });
+
+            const handleTouch = (el, isL, state) => {
+                el.addEventListener('touchstart', (e) => { e.preventDefault(); if(isL) keys.ArrowLeft=state; else keys.ArrowRight=state; }, {passive: false});
+                el.addEventListener('touchend', (e) => { e.preventDefault(); if(isL) keys.ArrowLeft=!state; else keys.ArrowRight=!state; }, {passive: false});
+            }
+            handleTouch(touchLeft, true, true); handleTouch(touchRight, false, true);
+            
+            touchBoost.addEventListener('touchstart', (e) => { e.preventDefault(); keys.Space = true; }, {passive: false});
+            touchBoost.addEventListener('touchend', (e) => { e.preventDefault(); keys.Space = false; }, {passive: false});
+            
+            touchFlight.addEventListener('touchstart', (e) => { 
+                e.preventDefault(); 
+                isPlayerFlying = !isPlayerFlying; 
+                touchFlight.style.backgroundColor = isPlayerFlying ? 'rgba(59, 130, 246, 0.5)' : 'rgba(59, 130, 246, 0.2)';
+            }, {passive: false});
+
+            // --- UI Setup ---
+            const skinListEl = document.getElementById('skin-list');
+            function renderSkinList() {
+                skinListEl.innerHTML = '';
+                vehicles.forEach((skin, index) => {
+                    const btn = document.createElement('button');
+                    const isSelected = index === selectedSkinIndex;
+                    btn.className = `skin-card flex flex-col items-center justify-center glass-panel p-3 transition-colors cursor-pointer ${isSelected ? 'border-green-400 bg-white/10' : 'border-white/10 hover:bg-white/5'}`;
+                    btn.innerHTML = `
+                        <span class="text-xs font-bold tracking-widest uppercase mb-1 ${isSelected ? 'text-green-400' : 'text-white'}">${skin.name}</span>
+                        <div class="flex flex-col w-full text-[8px] uppercase opacity-70 gap-0.5">
+                            <div class="flex justify-between"><span>SPD</span><div class="w-12 h-1 bg-white/20 mt-1"><div class="h-full bg-blue-400" style="width:${(skin.stats.topSpeed/1.6)*100}%"></div></div></div>
+                            <div class="flex justify-between"><span>ACC</span><div class="w-12 h-1 bg-white/20 mt-1"><div class="h-full bg-red-400" style="width:${(skin.stats.accel/1.6)*100}%"></div></div></div>
+                            <div class="flex justify-between"><span>HND</span><div class="w-12 h-1 bg-white/20 mt-1"><div class="h-full bg-green-400" style="width:${(skin.stats.handling/1.8)*100}%"></div></div></div>
+                        </div>
+                    `;
+                    btn.onclick = () => { selectedSkinIndex = index; renderSkinList(); };
+                    skinListEl.appendChild(btn);
+                });
+            }
+            renderSkinList();
+
+            const levelListEl = document.getElementById('level-list');
+            function renderLevelList() {
+                levelListEl.innerHTML = '';
+                raceLevels.forEach((level, index) => {
+                    const btn = document.createElement('button');
+                    const isSelected = index === selectedLevelIndex;
+                    btn.className = `flex justify-between items-center w-full glass-panel px-4 py-3 text-left transition-colors cursor-pointer ${isSelected ? 'border-green-400 text-green-400 bg-white/10' : 'border-white/10 text-white/50 hover:bg-white/5'}`;
+                    btn.innerHTML = `
+                        <div class="flex flex-col">
+                            <span class="text-xs font-bold tracking-widest uppercase">Race ${level.id}: ${level.name}</span>
+                            <span class="text-[10px] uppercase opacity-70">${level.theme} | ${level.length / 1000}km | ${level.diff}</span>
+                        </div>
+                        <span class="text-xs font-mono opacity-50">${level.bots} BOTS</span>
+                    `;
+                    btn.onclick = () => { selectedLevelIndex = index; renderLevelList(); };
+                    levelListEl.appendChild(btn);
+                });
+            }
+            renderLevelList();
+
+            // Set HUD Status cleanly
+            const setStatus = (msg, colorClass) => {
+                const sm = document.getElementById('status-msg');
+                if(sm.innerText !== msg) {
+                    sm.innerText = msg;
+                    sm.className = `text-[10px] md:text-xs font-medium mt-2 tracking-wide ${colorClass}`;
+                }
+            }
+
+            // --- Game Flow Methods ---
+            function startGame() {
+                const levelData = raceLevels[selectedLevelIndex];
+                const skinData = vehicles[selectedSkinIndex];
+                
+                currentTrack = levelData.theme;
+                raceEndPos = levelData.length;
+                playerStats = skinData.stats;
+                document.getElementById('hud-vehicle-name').innerText = skinData.name;
+
+                scene.remove(playerCarGroup);
+                playerCarGroup = buildVehicle(skinData, null);
+                playerCarGroup.position.set(0, 0, 10);
+                scene.add(playerCarGroup);
+
+                spawnOpponents(levelData.bots);
+                spawnObstacles(levelData.diff);
+
+                const t = trackConfigs[currentTrack];
+                scene.background.set(t.bg); scene.fog.color.set(t.bg);
+                
+                // Redraw procedural grid with proper theme color
+                gridCtx.fillStyle = t.roadBg; 
+                gridCtx.fillRect(0,0,512,512);
+                gridCtx.strokeStyle = t.grid; 
+                gridCtx.shadowColor = t.grid;
+                gridCtx.lineWidth = 4; gridCtx.shadowBlur = 10;
+                for(let i=0; i<=512; i+=64) { gridCtx.beginPath(); gridCtx.moveTo(i,0); gridCtx.lineTo(i,512); gridCtx.stroke(); }
+                for(let i=0; i<=512; i+=64) { gridCtx.beginPath(); gridCtx.moveTo(0,i); gridCtx.lineTo(512,i); gridCtx.stroke(); }
+                gridTex.needsUpdate = true;
+
+                leftBorder.material.color.set(t.border); rightBorder.material.color.set(t.border);
+                canyonMat.color.set(t.canyon); hemiLight.color.set(t.hemi); dirLight.color.set(t.dir);
+                particleMat.color.set(t.pColor); planetMat.color.set(t.planet);
+
+                document.getElementById('startup-screen').style.opacity = '0';
+                document.getElementById('end-screen').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('startup-screen').style.display = 'none';
+                    document.getElementById('end-screen').style.display = 'none';
+                    document.getElementById('ui-layer').style.opacity = '1';
+                    
+                    playerTrackPos = 0; distance = 0; currentSpeed = 0; currentX = 0; targetX = 0;
+                    nitroLevel = 100; trackCurve = 0; playerSkillModifier = 1.0;
+                    padBoostTimer = 0; impactTimer = 0;
+                    isPlayerFlying = false; touchFlight.style.backgroundColor = 'rgba(59, 130, 246, 0.2)';
+                    
+                    rings.forEach((ring, i) => { ring.position.z = 200 + i * 150; ring.logicalX = (Math.random() - 0.5) * (roadWidth - 5); ring.visible = true; });
+                    isRunning = true;
+                }, 800);
+            }
+
+            document.getElementById('start-btn').addEventListener('click', startGame);
+            document.getElementById('restart-btn').addEventListener('click', () => {
+                document.getElementById('end-screen').style.opacity = '0';
+                setTimeout(() => {
+                    document.getElementById('end-screen').style.display = 'none';
+                    document.getElementById('ui-layer').style.opacity = '0';
+                    document.getElementById('startup-screen').style.display = 'flex';
+                    setTimeout(() => document.getElementById('startup-screen').style.opacity = '1', 50);
+                }, 500);
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            const applyCurveToGeo = (geo) => {
+                const pos = geo.attributes.position;
+                for(let i=0; i<pos.count; i++) {
+                    const worldZ = -pos.getY(i); 
+                    const dist = Math.max(0, worldZ - 10);
+                    pos.setX(i, geo.userData.originalX[i] + trackCurve * Math.pow(dist, 2));
+                }
+                pos.needsUpdate = true;
+            };
+
+            const clock = new THREE.Clock();
+
+            function animate() {
+                requestAnimationFrame(animate);
+                try {
+                    const delta = clock.getDelta();
+                    if (isRunning) {
+                        if (currentRank === 1) playerSkillModifier += 0.005 * delta; 
+                        else if (currentRank > Math.ceil(totalRacersCount / 2)) playerSkillModifier -= 0.01 * delta;
+                        playerSkillModifier = Math.max(0.7, Math.min(playerSkillModifier, 1.4));
+
+                        curveTimer += delta * currentSpeed * 0.5;
+                        if (curveTimer > 4) { targetTrackCurve = (Math.random() - 0.5) * 0.007; curveTimer = 0; }
+                        trackCurve += (targetTrackCurve - trackCurve) * delta * 2.0;
+
+                        applyCurveToGeo(roadGeo); applyCurveToGeo(borderGeo);
+                        
+                        // Horizon Planet Parallax tracking
+                        planet.position.x = trackCurve * Math.pow(800, 2) * 0.5;
+
+                        // --- Transformation Logic (Player) ---
+                        const prevY = playerCarGroup.position.y;
+                        const targetAltitude = isPlayerFlying ? 8.0 + Math.sin(Date.now() * 0.003) * 1.5 : 0.0;
+                        playerCarGroup.position.y += (targetAltitude - playerCarGroup.position.y) * 0.1;
+                        const velocityY = playerCarGroup.position.y - prevY;
+                        
+                        playerCarGroup.rotation.x = -velocityY * 0.5;
+                        
+                        const targetWheelRotation = isPlayerFlying ? 0 : Math.PI / 2;
+                        playerCarGroup.userData.wheels.forEach(w => {
+                            w.mesh.rotation.z += (targetWheelRotation - w.mesh.rotation.z) * 0.15;
+                        });
+                        
+                        // Animate Thruster Flames (Visible flying OR boosting on ground)
+                        isBoosting = keys.Space && nitroLevel > 0;
+                        const targetOpacity = isPlayerFlying ? (0.6 + Math.random() * 0.4) : (isBoosting ? 0.8 + Math.random() * 0.2 : 0.0);
+                        if(playerCarGroup.userData.thrusters) {
+                            playerCarGroup.userData.thrusters.forEach(mat => {
+                                mat.opacity += (targetOpacity - mat.opacity) * 0.2;
+                            });
+                        }
+
+                        // --- Timers ---
+                        if (padBoostTimer > 0) padBoostTimer -= delta;
+                        if (impactTimer > 0) impactTimer -= delta;
+
+                        // --- Nitro Logic ---
+                        const tls = playerCarGroup.userData.tailLights;
+                        if (isBoosting) {
+                            nitroLevel -= 30 * delta; if (nitroLevel < 0) nitroLevel = 0;
+                            if(tls) tls.forEach(tl => { tl.material.color.setHex(0x00ffff); tl.material.emissive.setHex(0x00ffff); tl.material.emissiveIntensity = 20; });
+                        } else {
+                            nitroLevel += 8 * delta; if (nitroLevel > 100) nitroLevel = 100;
+                            if(tls) tls.forEach(tl => { tl.material.color.setHex(0xff0000); tl.material.emissive.setHex(0xff0000); tl.material.emissiveIntensity = 5; });
+                        }
+
+                        const maxS = baseMaxSpeed * playerStats.topSpeed;
+                        const acc = baseAccel * playerStats.accel;
+                        const hnd = 10 * playerStats.handling;
+                        
+                        const currentMaxSpeed = isBoosting ? maxS * 1.4 : maxS;
+                        if (padBoostTimer > 0) {
+                            // Pad boost holds extreme speed dynamically
+                        } else if (currentSpeed < currentMaxSpeed) {
+                            currentSpeed += acc * (isBoosting ? 3 : 1);
+                        } else if (!isBoosting && currentSpeed > maxS) {
+                            currentSpeed -= acc * 2;
+                        }
+
+                        distance += currentSpeed * 0.01; playerTrackPos += currentSpeed * 10;
+                        
+                        if (keys.ArrowLeft || keys.a) targetX += hnd * delta * 5;
+                        if (keys.ArrowRight || keys.d) targetX -= hnd * delta * 5;
+                        
+                        const centripetalMult = isPlayerFlying ? 0.3 : 1.0;
+                        targetX -= trackCurve * currentSpeed * 400 * delta * centripetalMult;
+                        targetX = Math.max(Math.min(targetX, roadWidth/2 - 1.5), -roadWidth/2 + 1.5);
+
+                        const steerDiff = targetX - currentX;
+                        const isDrifting = !isPlayerFlying && Math.abs(steerDiff) > 3.0 && currentSpeed > 2.0;
+                        const steerResponsiveness = isPlayerFlying ? 0.03 : (isDrifting ? 0.04 : 0.1);
+                        currentX += steerDiff * steerResponsiveness;
+                        playerCarGroup.position.x = currentX;
+
+                        playerCarGroup.rotation.z = steerDiff * 0.02; 
+                        playerCarGroup.rotation.y += ((isDrifting ? steerDiff * 0.12 : steerDiff * 0.05) - playerCarGroup.rotation.y) * 0.15;
+                        
+                        // --- Drafting / Slipstream Logic ---
+                        let isDrafting = false;
+                        if (!isPlayerFlying) {
+                            opponents.forEach(opp => {
+                                if (!opp.isFlying && opp.trackPos > playerTrackPos && opp.trackPos < playerTrackPos + 50) {
+                                    if (Math.abs(opp.logicalX - currentX) < 2.5) {
+                                        isDrafting = true;
+                                        currentSpeed += 0.002; // Gain speed while drafting
+                                        if (currentSpeed > maxS * 1.3 && !isBoosting && padBoostTimer <= 0) currentSpeed = maxS * 1.3;
+                                    }
+                                }
+                            });
+                        }
+
+                        // Status UI Logic
+                        if (impactTimer > 0) setStatus("IMPACT DETECTED", "text-red-500");
+                        else if (isPlayerFlying) setStatus("AEROSPACE MODE", "text-cyan-400");
+                        else if (padBoostTimer > 0) setStatus("PAD BOOST", "text-green-400");
+                        else if (isDrafting) setStatus("SLIPSTREAM", "text-purple-400");
+                        else if (isDrifting) { currentSpeed -= 0.005; setStatus("DRIFTING", "text-yellow-400"); }
+                        else setStatus("SYSTEM NOMINAL", "text-blue-300");
+                        
+                        playerCarGroup.userData.wheels.forEach(w => {
+                            if (!isPlayerFlying) w.mesh.rotation.x += currentSpeed * 0.5;
+                            else w.mesh.rotation.x += (0 - w.mesh.rotation.x) * 0.15; 
+                            if (w.isFront) w.mesh.rotation.y = steerDiff * 0.05; 
+                        });
+
+                        const levelDiff = raceLevels[selectedLevelIndex].diff;
+                        let diffMult = levelDiff==='easy'?0.85 : levelDiff==='medium'?0.92 : levelDiff==='hard'?0.96 : levelDiff==='expert'?0.99 : 1.01; 
+
+                        // AI Logic
+                        const now = Date.now();
+                        opponents.forEach(opp => {
+                            const distDiff = playerTrackPos - opp.trackPos;
+                            const natFluc = Math.sin(now * opp.moodSpeed + opp.moodOffset) * 0.35;
+                            
+                            let prefSpeed = currentSpeed * diffMult * opp.baseSpeedMult * playerSkillModifier * opp.stats.topSpeed + natFluc;
+
+                            if (distDiff > 1000) opp.targetSpeed = maxS * (diffMult + 0.1);
+                            else if (distDiff < -500) opp.targetSpeed = currentSpeed * (diffMult - 0.2);
+                            else opp.targetSpeed = prefSpeed;
+
+                            opp.targetSpeed = Math.max(0.5, Math.min(opp.targetSpeed, maxS * 1.15));
+                            opp.speed += (opp.targetSpeed - opp.speed) * 0.02 * opp.stats.accel; 
+                            opp.trackPos += opp.speed * 10;
+
+                            const oppPrevY = opp.group.position.y;
+                            const oppTargetAltitude = opp.isFlying ? 8.0 + Math.sin(now * 0.003 + opp.moodOffset) * 1.5 : 0.0;
+                            opp.group.position.y += (oppTargetAltitude - opp.group.position.y) * 0.1;
+                            const oppVelocityY = opp.group.position.y - oppPrevY;
+                            opp.group.rotation.x = -oppVelocityY * 0.5;
+
+                            const oppTargetWheelRot = opp.isFlying ? 0 : Math.PI / 2;
+                            opp.group.userData.wheels.forEach(w => w.mesh.rotation.z += (oppTargetWheelRot - w.mesh.rotation.z) * 0.15);
+                            
+                            const oppTargetOpacity = opp.isFlying ? 0.6 + Math.random() * 0.4 : (opp.speed > baseMaxSpeed*1.2 ? 0.5+Math.random()*0.3 : 0.0);
+                            if(opp.group.userData.thrusters) {
+                                opp.group.userData.thrusters.forEach(mat => mat.opacity += (oppTargetOpacity - mat.opacity) * 0.2);
+                            }
+
+                            if (now > opp.nextLaneChangeTime) {
+                                opp.lane = (Math.random() - 0.5) * (roadWidth - 6); 
+                                if(Math.random() > 0.8) opp.isFlying = Math.random() > 0.5;
+                                opp.nextLaneChangeTime = now + 2000 + Math.random() * 4000; 
+                            }
+                            const oppSteerDiff = opp.lane - opp.logicalX;
+                            opp.logicalX += oppSteerDiff * 0.02 * opp.stats.handling; 
+
+                            const distToOpp = Math.max(0, opp.group.position.z - 10);
+                            opp.group.position.x = opp.logicalX + trackCurve * Math.pow(distToOpp, 2);
+                            opp.group.position.z = 10 + (opp.trackPos - playerTrackPos) * 0.1;
+                            
+                            const curveAngle = Math.atan(-2 * trackCurve * distToOpp);
+                            opp.group.rotation.y = (oppSteerDiff * 0.06) + curveAngle; 
+                            opp.group.rotation.z = oppSteerDiff * 0.03; 
+
+                            opp.group.userData.wheels.forEach(w => {
+                                if (!opp.isFlying) w.mesh.rotation.x += opp.speed * 0.5;
+                                else w.mesh.rotation.x += (0 - w.mesh.rotation.x) * 0.15;
+                                if (w.isFront) w.mesh.rotation.y = oppSteerDiff * 0.08;
+                            });
+                        });
+
+                        const racers = [{ name: 'Player', pos: playerTrackPos, isPlayer: true }, ...opponents.map(o => ({ name: o.name, pos: o.trackPos, isPlayer: false }))];
+                        racers.sort((a, b) => b.pos - a.pos);
+                        currentRank = racers.findIndex(r => r.isPlayer) + 1;
+                        totalRacersCount = raceLevels[selectedLevelIndex].bots + 1;
+                        
+                        document.getElementById('position-display').innerHTML = `${currentRank} <span class="text-sm md:text-lg font-light opacity-70">/ ${totalRacersCount}</span>`;
+
+                        let progress = Math.min(100, (playerTrackPos / raceEndPos) * 100);
+                        document.getElementById('race-progress-bar').style.width = progress + '%';
+                        document.getElementById('race-pct').innerText = Math.floor(progress) + '%';
+                        
+                        if (playerTrackPos >= raceEndPos) {
+                            isRunning = false;
+                            document.getElementById('final-pos').innerText = currentRank;
+                            document.getElementById('end-screen').querySelector('p').innerHTML = `FINAL POSITION: <span class="font-bold text-5xl ml-2 text-green-400">${currentRank}</span><span class="text-lg opacity-50"> / ${totalRacersCount}</span>`;
+                            const endScreen = document.getElementById('end-screen');
+                            endScreen.style.display = 'flex';
+                            setTimeout(() => endScreen.style.opacity = '1', 50);
+                        }
+
+                        // CANYON ANIMATION
+                        canyonItems.forEach(item => {
+                            item.position.z -= currentSpeed;
+                            if (item.position.z < playerCarGroup.position.z - 40) {
+                                item.position.z += 1000;
+                                item.logicalX = (item.logicalX > 0 ? 1 : -1) * (roadWidth/2 + 10 + Math.random() * 5);
+                            }
+                            item.position.x = item.logicalX + trackCurve * Math.pow(Math.max(0, item.position.z - 10), 2);
+                        });
+
+                        const pPos = particles.geometry.attributes.position.array;
+                        for(let i=0; i<particleCount; i++) {
+                            pPos[i*3+2] -= currentSpeed * (isBoosting ? 4 : 1.5);
+                            if(pPos[i*3+2] < -10) { pPos[i*3+2] = 200 + Math.random() * 50; pPos[i*3] = (Math.random() - 0.5) * 150; }
+                        }
+                        particles.geometry.attributes.position.needsUpdate = true;
+
+                        rings.forEach(ring => {
+                            ring.position.z -= currentSpeed;
+                            if (ring.position.z < playerCarGroup.position.z - 10) {
+                                ring.position.z += 600 + Math.random() * 400; ring.logicalX = (Math.random() - 0.5) * (roadWidth - 8); ring.visible = true; 
+                            }
+                            const distToRing = Math.max(0, ring.position.z - 10);
+                            ring.position.x = ring.logicalX + trackCurve * Math.pow(distToRing, 2);
+                            ring.rotation.z += 0.05;
+
+                            if (ring.visible && Math.abs(ring.position.z - playerCarGroup.position.z) < 2.5 && Math.abs(ring.position.x - playerCarGroup.position.x) < 3.0 && Math.abs(ring.position.y - playerCarGroup.position.y) < 2.0) {
+                                ring.visible = false; nitroLevel = Math.min(100, nitroLevel + 35);
+                                const nb = document.getElementById('nitro-bar'); nb.classList.add('bg-white'); setTimeout(() => nb.classList.remove('bg-white'), 150);
+                            }
+                        });
+
+                        // GROUND BOOST PADS
+                        boostPads.forEach(p => {
+                            p.zPos -= currentSpeed;
+                            if (p.zPos < playerCarGroup.position.z - 10) {
+                                p.zPos += 1500 + Math.random() * 2000; p.logicalX = (Math.random() - 0.5) * (roadWidth - 8); p.active = true; p.mesh.visible = true;
+                            }
+                            const distToPad = Math.max(0, p.zPos - 10);
+                            p.mesh.position.x = p.logicalX + trackCurve * Math.pow(distToPad, 2);
+                            p.mesh.position.z = p.zPos;
+                            p.mesh.rotation.z = Math.atan(-2 * trackCurve * distToPad);
+
+                            // Player Hit Boost Pad
+                            if (p.active && Math.abs(p.zPos - playerCarGroup.position.z) < 4.0 && Math.abs(p.mesh.position.x - playerCarGroup.position.x) < 3.0) {
+                                if(playerCarGroup.position.y < 3.0) {
+                                    p.active = false; p.mesh.visible = false;
+                                    currentSpeed = Math.max(currentSpeed + baseMaxSpeed * 0.6, maxS * 1.5);
+                                    nitroLevel = Math.min(100, nitroLevel + 30);
+                                    padBoostTimer = 1.0;
+                                }
+                            }
+                        });
+
+                        // GROUND BARRIERS
+                        barriers.forEach(b => {
+                            b.zPos -= currentSpeed;
+                            if (b.zPos < playerCarGroup.position.z - 10) {
+                                b.zPos += 800 + Math.random() * 1500; b.logicalX = (Math.random() - 0.5) * (roadWidth - 8); b.active = true; b.mesh.visible = true;
+                            }
+                            const distToBarrier = Math.max(0, b.zPos - 10);
+                            b.mesh.position.x = b.logicalX + trackCurve * Math.pow(distToBarrier, 2);
+                            b.mesh.position.z = b.zPos;
+                            b.mesh.rotation.y = Math.atan(-2 * trackCurve * distToBarrier);
+
+                            // Player Hit
+                            if (b.active && Math.abs(b.zPos - playerCarGroup.position.z) < 2.0 && Math.abs(b.mesh.position.x - playerCarGroup.position.x) < 3.2) {
+                                if(playerCarGroup.position.y < 3.0) { // Only hit if on ground!
+                                    b.active = false; b.mesh.visible = false; 
+                                    currentSpeed *= 0.3; nitroLevel = Math.max(0, nitroLevel - 25);
+                                    impactTimer = 1.0;
+                                    const flash = document.getElementById('damage-flash'); flash.style.background = 'rgba(255, 0, 0, 0.3)'; flash.style.opacity = '1';
+                                    setTimeout(() => { flash.style.opacity = '0'; }, 100);
+                                }
+                            }
+                            
+                            // AI Dodge Barrier
+                            opponents.forEach(opp => {
+                                if (b.active && b.zPos > opp.trackPos && b.zPos < opp.trackPos + 120 && Math.abs(b.logicalX - opp.logicalX) < 3.5 && opp.group.position.y < 3.0) {
+                                    if(Math.random() > 0.5) opp.lane += (opp.logicalX < 0) ? 6 : -6; 
+                                    else opp.isFlying = true; 
+                                    opp.nextLaneChangeTime = now + 2000;
+                                }
+                            });
+                        });
+
+                        // SKY CLOUDS
+                        clouds.forEach(c => {
+                            c.zPos -= currentSpeed;
+                            if (c.zPos < playerCarGroup.position.z - 10) {
+                                c.zPos += 1000 + Math.random() * 2000; c.logicalX = (Math.random() - 0.5) * roadWidth; c.active = true; c.mesh.visible = true;
+                            }
+                            const distToCloud = Math.max(0, c.zPos - 10);
+                            c.mesh.position.x = c.logicalX + trackCurve * Math.pow(distToCloud, 2);
+                            c.mesh.position.z = c.zPos;
+
+                            if (c.active && Math.abs(c.zPos - playerCarGroup.position.z) < 3.0 && Math.abs(c.mesh.position.x - playerCarGroup.position.x) < 4.0) {
+                                if(playerCarGroup.position.y > 5.0) { 
+                                    c.active = false; c.mesh.visible = false; 
+                                    currentSpeed *= 0.6;
+                                    impactTimer = 0.5;
+                                    const flash = document.getElementById('damage-flash'); flash.style.background = 'rgba(255, 255, 255, 0.8)'; flash.style.opacity = '1';
+                                    setTimeout(() => { flash.style.opacity = '0'; }, 150);
+                                }
+                            }
+
+                            opponents.forEach(opp => {
+                                if (c.active && opp.isFlying && c.zPos > opp.trackPos && c.zPos < opp.trackPos + 120 && Math.abs(c.logicalX - opp.logicalX) < 4.0) {
+                                    opp.isFlying = false; 
+                                    opp.nextLaneChangeTime = now + 2000;
+                                }
+                            });
+                        });
+
+                        // Camera follow dynamics with SHAKE
+                        camera.position.x += (currentX * 0.5 - camera.position.x) * 0.1;
+                        let shakeX = 0, shakeY = 0;
+                        if (isBoosting || currentSpeed > baseMaxSpeed * 1.3 || padBoostTimer > 0) {
+                            const intensity = Math.max(0, ((currentSpeed - baseMaxSpeed) / baseMaxSpeed) * 0.06);
+                            shakeX = (Math.random() - 0.5) * intensity;
+                            shakeY = (Math.random() - 0.5) * intensity;
+                        }
+                        
+                        camera.up.set(-trackCurve * 12, 1, 0).normalize();
+                        camera.lookAt(currentX * 0.2 + shakeX, playerCarGroup.position.y * 0.5 + shakeY, 20); 
+                        
+                        camera.fov += ((60 + (currentSpeed / maxS) * 20 + (isBoosting || padBoostTimer > 0 ? 20 : 0)) - camera.fov) * 0.1;
+                        camera.updateProjectionMatrix();
+
+                        document.getElementById('speed-display').innerText = Math.floor((currentSpeed / baseMaxSpeed) * 220).toString().padStart(3, '0');
+                        
+                        const rpmPct = (currentSpeed / (maxS * 1.4)) * 100;
+                        const rBar = document.getElementById('rpm-bar'); rBar.style.width = `${Math.min(100, rpmPct)}%`;
+                        if(rpmPct > 90) rBar.classList.add('bg-red-500'); else rBar.classList.remove('bg-red-500');
+
+                        const nBar = document.getElementById('nitro-bar'); nBar.style.width = `${nitroLevel}%`;
+                        if (nitroLevel < 20) nBar.classList.add('bg-red-400'); else nBar.classList.remove('bg-red-400');
+                    }
+
+                    renderer.render(scene, camera);
+                } catch(e) {
+                    const sm = document.getElementById('status-msg');
+                    if(sm) { sm.innerText = "SYS ERR: " + e.message; sm.classList.add('text-red-500'); sm.classList.remove('text-blue-300', 'text-cyan-400'); }
+                }
+            }
+            animate();
+        };
+    </script>
+</body>
+</html>
